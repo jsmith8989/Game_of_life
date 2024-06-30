@@ -1,6 +1,8 @@
 import pygame
 import numpy as np
 import time
+import pickle
+import random
 
 pygame.init()
 
@@ -20,10 +22,27 @@ cols, rows = width // cell_size, height // cell_size
 p_alive, p_dead = 7, 93
 simulation_speed = 10
 
+# Zoom
+zoom = 1
+
+# Color scheme
+background_color = (0, 0, 0)  # Always black
+current_cell_color = (255, 255, 255)  # Initial cell color (white)
+cell_colors = {}  # Dictionary to store colors of individual cells
+
 
 def create_random_grid():
-    global p_alive, p_dead
-    return np.random.choice([1, 0], size=(rows, cols), p=[p_alive / 100, p_dead / 100])
+    global p_alive, p_dead, cell_colors
+    new_grid = np.random.choice(
+        [1, 0], size=(rows, cols), p=[p_alive / 100, p_dead / 100]
+    )
+    cell_colors = {
+        (i, j): current_cell_color
+        for i in range(rows)
+        for j in range(cols)
+        if new_grid[i, j] == 1
+    }
+    return new_grid
 
 
 grid = create_random_grid()
@@ -53,10 +72,14 @@ pygame.key.set_repeat(200, 50)  # 200ms delay, 50ms interval
 # Instructions
 instructions = [
     "Space: Reinitialize grid",
-    "Up: Increase alive %",
-    "Down: Decrease alive %",
-    "Right: Increase speed",
-    "Left: Decrease speed",
+    "Up/Down: Change alive %",
+    "Right/Left: Change speed",
+    "S: Save grid",
+    "L: Load grid",
+    "G: Create glider",
+    "+/-: Zoom in/out",
+    "C: Change new cell color",
+    "W: Reset all cells to white",
     "Esc: End simulation",
 ]
 
@@ -66,7 +89,7 @@ start_time = time.time()
 
 # Instruction box settings
 box_width = 250
-box_height = 200  # Increased height to accommodate the new line
+box_height = 300  # Adjusted height for new instruction
 box_padding = 10
 box_x = width - box_width - 10
 box_y = 90
@@ -94,10 +117,10 @@ def initialize_active_cells():
 
 
 def update_grid():
-    global grid, active_cells
+    global grid, active_cells, cell_colors
     new_grid = grid.copy()
     new_active_cells = set()
-    cells_to_check = active_cells.copy()  # Create a copy to iterate over
+    cells_to_check = active_cells.copy()
 
     for i, j in cells_to_check:
         total = int(
@@ -120,11 +143,15 @@ def update_grid():
                 add_neighbors_to_set(i, j, new_active_cells)
             else:
                 new_grid[i, j] = 0
+                cell_colors.pop((i, j), None)
         else:
             if total == 3:
                 new_grid[i, j] = 1
                 new_active_cells.add((i, j))
                 add_neighbors_to_set(i, j, new_active_cells)
+                cell_colors[(i, j)] = (
+                    current_cell_color  # Assign current color to new cell
+                )
 
     grid = new_grid
     active_cells = new_active_cells
@@ -141,6 +168,61 @@ def update_simulation_speed(increment):
     simulation_speed = max(1, simulation_speed + increment)
 
 
+def save_grid(filename):
+    with open(filename, "wb") as f:
+        pickle.dump((grid, cell_colors), f)
+
+
+def load_grid(filename):
+    global grid, cell_colors
+    with open(filename, "rb") as f:
+        grid, cell_colors = pickle.load(f)
+    initialize_active_cells()
+
+
+def create_glider(x, y):
+    global grid, cell_colors
+    glider = np.array([[0, 1, 0], [0, 0, 1], [1, 1, 1]])
+    grid[y : y + 3, x : x + 3] = glider
+    for i in range(3):
+        for j in range(3):
+            if glider[i, j] == 1:
+                cell_colors[(y + i, x + j)] = current_cell_color
+    initialize_active_cells()
+
+
+def get_statistics():
+    population = np.sum(grid)
+    return f"Population: {population}"
+
+
+def draw_grid():
+    for i, j in active_cells:
+        if grid[i, j] == 1:
+            x = int(j * cell_size * zoom)
+            y = int(i * cell_size * zoom)
+            size = int(cell_size * zoom)
+            if 0 <= x < width and 0 <= y < height:
+                pygame.draw.rect(
+                    screen, cell_colors.get((i, j), WHITE), (x, y, size - 1, size - 1)
+                )
+
+
+def change_cell_color():
+    global current_cell_color
+    current_cell_color = (
+        random.randint(0, 255),
+        random.randint(0, 255),
+        random.randint(0, 255),
+    )
+
+
+def reset_cells_to_white():
+    global cell_colors, current_cell_color
+    cell_colors = {key: WHITE for key in cell_colors}
+    current_cell_color = WHITE
+
+
 initialize_active_cells()
 
 while running:
@@ -148,20 +230,36 @@ while running:
         if event.type == pygame.QUIT:
             running = False
         elif event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_ESCAPE:  # Press ESC to exit fullscreen
+            if event.key == pygame.K_ESCAPE:
                 running = False
-            elif event.key == pygame.K_SPACE:  # Press SPACE to reinitialize grid
+            elif event.key == pygame.K_SPACE:
                 grid = create_random_grid()
                 initialize_active_cells()
+            elif event.key == pygame.K_s:
+                save_grid("saved_grid.pkl")
+            elif event.key == pygame.K_l:
+                load_grid("saved_grid.pkl")
+            elif event.key == pygame.K_g:
+                create_glider(cols // 2, rows // 2)
+            elif event.key == pygame.K_c:
+                change_cell_color()
+            elif event.key == pygame.K_w:
+                reset_cells_to_white()
+            elif event.key == pygame.K_PLUS:
+                zoom = min(zoom * 1.1, 10)
+            elif event.key == pygame.K_MINUS:
+                zoom = max(zoom / 1.1, 0.1)
         elif event.type == pygame.MOUSEBUTTONDOWN:
-            # Toggle cell state on mouse click
             pos = pygame.mouse.get_pos()
-            col, row = pos[0] // cell_size, pos[1] // cell_size
-            grid[row, col] = 1 - grid[row, col]
-            active_cells.add((row, col))
-            add_neighbors_to_set(row, col, active_cells)
+            col, row = int(pos[0] / cell_size / zoom), int(pos[1] / cell_size / zoom)
+            grid[row % rows, col % cols] = 1 - grid[row % rows, col % cols]
+            if grid[row % rows, col % cols] == 1:
+                cell_colors[(row % rows, col % cols)] = current_cell_color
+            else:
+                cell_colors.pop((row % rows, col % cols), None)
+            active_cells.add((row % rows, col % cols))
+            add_neighbors_to_set(row % rows, col % cols, active_cells)
 
-    # Handle held down keys
     keys = pygame.key.get_pressed()
     if keys[pygame.K_UP]:
         update_p_values(1)
@@ -172,36 +270,23 @@ while running:
     if keys[pygame.K_LEFT]:
         update_simulation_speed(-1)
 
-    screen.fill(BLACK)
+    screen.fill(background_color)
 
-    # Draw grid
-    for i, j in active_cells:
-        if grid[i, j] == 1:
-            pygame.draw.rect(
-                screen,
-                WHITE,
-                (j * cell_size, i * cell_size, cell_size - 1, cell_size - 1),
-            )
+    draw_grid()
 
-    # Display p values and simulation speed
     p_text = font.render(f"Alive: {p_alive}% Dead: {p_dead}%", True, WHITE)
     speed_text = font.render(f"Speed: {simulation_speed}", True, WHITE)
+    stats_text = font.render(get_statistics(), True, WHITE)
     screen.blit(p_text, (width - p_text.get_width() - 10, 10))
     screen.blit(speed_text, (width - speed_text.get_width() - 10, 50))
+    screen.blit(stats_text, (10, height - 40))
 
-    # Display instructions for 12 seconds
     if time.time() - start_time < instruction_display_time:
-        # Draw instruction box
         pygame.draw.rect(screen, ORANGE, (box_x, box_y, box_width, box_height))
-
-        # Calculate total height of all instructions with spacing, excluding the last extra space
         total_text_height = (
             len(instructions) - 1
         ) * line_spacing + small_font.get_linesize()
-
-        # Calculate starting y position to center text vertically
         text_start_y = box_y + (box_height - total_text_height) // 2
-
         for i, instruction in enumerate(instructions):
             instruction_text = small_font.render(instruction, True, BLACK)
             screen.blit(
@@ -210,6 +295,6 @@ while running:
 
     update_grid()
     pygame.display.flip()
-    clock.tick(simulation_speed)  # Adjust the speed of the simulation
+    clock.tick(simulation_speed)
 
 pygame.quit()
